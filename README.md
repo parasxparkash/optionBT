@@ -1,8 +1,9 @@
 # 📈 Options Strategy Backtester Pro
 
-[![Streamlit App](https://img.shields.io/badge/Streamlit-1.0.0-ff4b4b)](https://share.streamlit.io/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://optionbt.streamlit.app/)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-blue)](https://github.com/parasxparkash/optionBT.git)
 
 ## Overview
 
@@ -273,6 +274,8 @@ For questions, issues, or feature requests:
 
 **Made with ❤️ for options traders and quantitative analysts**
 
-**Repository**: https://github.com/parasxparkash/optionBT.git
+**🌐 Live Demo**: [https://optionbt.streamlit.app/](https://optionbt.streamlit.app/)
 
-**Live Demo**: Run `streamlit run app.py` locally
+**📦 Repository**: [https://github.com/parasxparkash/optionBT.git](https://github.com/parasxparkash/optionBT.git)
+
+**💻 Local Demo**: Run `streamlit run app.py` locally
