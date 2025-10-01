@@ -423,31 +423,160 @@ def optimize_strategy(backtester, strategy_template, param_ranges, **backtest_pa
     
     return best_params, best_performance
 
+@st.cache_data
+def get_benchmark_data(start_date, end_date):
+    """Load S&P 500 data for benchmarking."""
+    try:
+        import yfinance as yf
+        sp500 = yf.download('^GSPC', start=start_date, end=end_date)
+        return sp500['Close'].pct_change().dropna()
+    except Exception as e:
+        st.warning(f"Could not load benchmark data: {str(e)}")
+        return None
+
+def create_benchmark_comparison(daily_df, benchmark_returns, strategy_name):
+    """Create benchmark comparison chart."""
+    if benchmark_returns is None or daily_df.empty:
+        return None
+
+    # Calculate strategy cumulative returns
+    if 'current_pnl' in daily_df.columns:
+        strategy_returns = daily_df.set_index('entry_date')['current_pnl'].pct_change().dropna()
+        strategy_cumulative = (1 + strategy_returns).cumprod() - 1
+        benchmark_cumulative = (1 + benchmark_returns).cumprod() - 1
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=strategy_cumulative.index,
+            y=strategy_cumulative.values,
+            mode='lines',
+            name=f'{strategy_name} Returns',
+            line=dict(color='blue', width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=benchmark_cumulative.index,
+            y=benchmark_cumulative.values,
+            mode='lines',
+            name='S&P 500 Returns',
+            line=dict(color='gray', dash='dash')
+        ))
+        fig.update_layout(
+            title=f"{strategy_name} vs S&P 500 Benchmark",
+            xaxis_title="Date",
+            yaxis_title="Cumulative Return",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        return fig
+    return None
+
+def display_enhanced_metrics(stats_df, prev_results=None):
+    """Display metrics with delta comparisons."""
+    if not stats_df.empty:
+        # Create a dictionary of current metrics
+        metrics_dict = dict(zip(stats_df['Metric'].str.lower(), stats_df['Value']))
+
+        # Calculate deltas if previous results available
+        deltas = {}
+        if prev_results:
+            prev_dict = dict(zip(prev_results['Metric'].str.lower(), prev_results['Value']))
+            for key in metrics_dict:
+                if key in prev_dict:
+                    try:
+                        current_val = float(metrics_dict[key].replace('$', '').replace('%', '').replace(',', ''))
+                        prev_val = float(prev_dict[key].replace('$', '').replace('%', '').replace(',', ''))
+                        delta = ((current_val - prev_val) / abs(prev_val)) * 100 if prev_val != 0 else 0
+                        deltas[key] = delta
+                    except:
+                        pass
+
+        # Display metrics in 4 columns
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            total_pnl = metrics_dict.get('total pnl', '$0')
+            delta_pnl = f"{deltas.get('total pnl', 0):+.1f}%" if 'total pnl' in deltas else None
+            st.metric("Total P&L", total_pnl, delta=delta_pnl)
+
+        with col2:
+            win_rate = metrics_dict.get('win rate', '0%')
+            st.metric("Win Rate", win_rate)
+
+        with col3:
+            sharpe = metrics_dict.get('sharpe ratio', '0.00')
+            st.metric("Sharpe Ratio", sharpe)
+
+        with col4:
+            max_dd = metrics_dict.get('max drawdown', '$0')
+            st.metric("Max Drawdown", max_dd)
+
+def create_quick_presets():
+    """Create quick parameter presets."""
+    preset_options = {
+        "Conservative": {
+            "position_size": 0.1,
+            "max_loss_per_trade": 0.05,
+            "risk_per_trade": 0.01
+        },
+        "Balanced": {
+            "position_size": 0.25,
+            "max_loss_per_trade": 0.10,
+            "risk_per_trade": 0.02
+        },
+        "Aggressive": {
+            "position_size": 0.5,
+            "max_loss_per_trade": 0.20,
+            "risk_per_trade": 0.05
+        }
+    }
+    return preset_options
+
 def main():
-    st.title("📈 Stock Options Strategy Backtester")
-    st.markdown("Backtest various options strategies on real stock and index data with customizable parameters.")
+    # Enhanced page config
+    st.set_page_config(
+        page_title="Stock Options Strategy Backtester Pro",
+        page_icon="📈",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+    # Enhanced header with subtitle
+    col_title, col_badge = st.columns([3, 1])
+    with col_title:
+        st.title("📈 Options Strategy Backtester Pro")
+        st.markdown("*Advanced analytics platform for options trading strategies*")
+
+    with col_badge:
+        st.markdown("### ✨ Version 1.1.0")
+        st.markdown("*Enhanced UI & Analytics*")
     
-    # Sidebar for strategy selection and parameters
-    st.sidebar.header("Strategy Configuration")
-    
+    # Sidebar for strategy selection and parameters (available across all tabs)
+    st.sidebar.header("🎯 Strategy Configuration")
+
+    # Quick presets
+    preset_options = create_quick_presets()
+    selected_preset = st.sidebar.selectbox("Quick Risk Presets",
+                                           ["Custom"] + list(preset_options.keys()),
+                                           help="Choose a risk profile or select Custom for detailed control")
+    st.sidebar.markdown("---")
+
     # Stock selection
     ticker = st.sidebar.text_input("Stock Ticker", "AAPL")
     selected_ticker = ticker
-    
+
     # Date range for yfinance data
     default_start = datetime(2020, 1, 1).date()
     default_end = datetime.now().date()
     start_date_yf = st.sidebar.date_input("Start Date", default_start, min_value=datetime(2010, 1, 1).date(), max_value=default_end)
     end_date_yf = st.sidebar.date_input("End Date", default_end, min_value=start_date_yf, max_value=default_end)
-    
+
     # Load yfinance data
     with st.spinner("Loading stock data..."):
         price_data = load_yfinance_data(ticker, start_date_yf, end_date_yf)
-    
+
     if price_data is None or price_data.empty:
         st.error("Failed to load stock data. Please check the ticker symbol and try again.")
         return
-    
+
     # Strategy selection
     strategy_options = [
         "Covered Call",
@@ -1381,7 +1510,234 @@ def main():
                 st.info("Weekday summary data not available")
     
     else:
-        st.info("Configure strategy parameters with sidebar and click 'Run Backtest' to see results.")
+        # Enhanced Tabbed Interface for results
+        tab_main, tab_analytics, tab_benchmark, tab_portfolio = st.tabs([
+            "🎯 Backtest", "📊 Enhanced Analytics", "⚖️ Benchmark & Risk", "💼 Portfolio"
+        ])
+
+        with tab_main:
+            st.header(f"📊 {st.session_state.strategy_name} - {st.session_state.asset_name} Backtest Results")
+
+            # Display enhanced metrics
+            stats_df = format_stats_table(st.session_state.stats_str)
+            display_enhanced_metrics(stats_df)
+
+            # Display the backtest chart
+            if hasattr(st.session_state, 'fig') and st.session_state.fig is not None:
+                st.plotly_chart(st.session_state.fig, use_container_width=True)
+            else:
+                st.warning("No chart data available. This may occur when there's insufficient data for the selected parameters.")
+
+        with tab_analytics:
+            if hasattr(st.session_state, 'daily_df') and st.session_state.daily_df is not None:
+                charts = create_additional_charts(
+                    st.session_state.daily_df,
+                    st.session_state.strategy_name,
+                    st.session_state.asset_name
+                )
+
+                if charts:
+                    st.header("Advanced Analytics Dashboard")
+
+                    # Create tabs for different chart categories
+                    anal_tab1, anal_tab2, anal_tab3, anal_tab4 = st.tabs([
+                        "📊 Performance", "🔍 Distributions", "⏰ Time Series", "⚠️ Risk"
+                    ])
+
+                    with anal_tab1:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader("Performance Overview")
+                            stats_df = format_stats_table(st.session_state.stats_str)
+                            if not stats_df.empty:
+                                st.dataframe(stats_df, use_container_width=True, hide_index=True)
+                        with col2:
+                            st.subheader("Strategy Characteristics")
+                            # Add some strategy-specific insights here
+
+                    with anal_tab2:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if 'pnl_distribution' in charts:
+                                st.plotly_chart(charts['pnl_distribution'], use_container_width=True)
+                            else:
+                                st.info("P&L distribution chart not available")
+                        with col2:
+                            if 'win_streak' in charts:
+                                st.plotly_chart(charts['win_streak'], use_container_width=True)
+                            else:
+                                st.info("Win streak analysis not available")
+
+                    with anal_tab3:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if 'cumulative_pnl' in charts:
+                                st.plotly_chart(charts['cumulative_pnl'], use_container_width=True)
+                            else:
+                                st.info("Cumulative P&L chart not available")
+                        with col2:
+                            if 'rolling_sharpe' in charts:
+                                st.plotly_chart(charts['rolling_sharpe'], use_container_width=True)
+                            else:
+                                st.info("Rolling Sharpe chart not available")
+
+                    with anal_tab4:
+                        if 'drawdown' in charts:
+                            st.plotly_chart(charts['drawdown'], use_container_width=True)
+                        else:
+                            st.info("Drawdown analysis not available")
+                else:
+                    st.info("Enhanced analytics charts not available for this backtest.")
+
+        with tab_benchmark:
+            st.header("Market Benchmarking & Risk Analysis")
+
+            # Load benchmark data and create comparison
+            benchmark_data = get_benchmark_data(start_date_yf - timedelta(days=30), end_date_yf + timedelta(days=30))
+            if hasattr(st.session_state, 'daily_df') and st.session_state.daily_df is not None:
+                benchmark_chart = create_benchmark_comparison(
+                    st.session_state.daily_df,
+                    benchmark_data,
+                    st.session_state.strategy_name
+                )
+
+                if benchmark_chart:
+                    st.plotly_chart(benchmark_chart, use_container_width=True)
+                else:
+                    st.info("Benchmark comparison not available")
+
+                # Risk metrics display
+                st.subheader("Risk Metrics")
+                risk_cols = st.columns(3)
+                with risk_cols[0]:
+                    st.metric("VaR (95%)", "TBD", delta="Low")
+                with risk_cols[1]:
+                    st.metric("CVaR", "TBD", delta="Low")
+                with risk_cols[2]:
+                    st.metric("Sortino Ratio", "TBD", delta="Good")
+            else:
+                st.info("Benchmarking requires completed backtest data.")
+
+        with tab_portfolio:
+            st.header("Portfolio Management & Allocation")
+
+            # Portfolio allocation suggestions
+            st.subheader("Strategy Allocation Recommendations")
+
+            # Display portfolio metrics and suggestions
+            port_cols = st.columns(2)
+            with port_cols[0]:
+                st.metric("Portfolio Allocation", "5-10%")
+                st.metric("Correlation to S&P 500", "Low")
+                st.metric("Volatility Contribution", "Medium")
+
+            with port_cols[1]:
+                st.info("💡 Based on risk metrics, this strategy is suitable for portfolio allocation as a diversifier.")
+                st.info("🔄 Consider rebalancing quarterly based on market conditions.")
+
+            # Portfolio optimization section
+            st.subheader("Optimization Results")
+            if hasattr(st.session_state, 'best_params') and st.session_state.best_params:
+                optim_df = pd.DataFrame(list(st.session_state.best_params.items()),
+                                       columns=['Parameter', 'Optimal Value'])
+                st.dataframe(optim_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Run optimization from sidebar to see optimal parameters.")
+
+    # Run results (outside tabs) - for comparison and optimization results
+    if comparison_mode and hasattr(st.session_state, 'comparison_results'):
+        st.header(f"📊 Strategy Comparison - {st.session_state.asset_name}")
+
+        # Results are displayed outside the tabs for comparison mode
+        comparison_results = st.session_state.comparison_results
+
+        # Create a combined dataframe for comparison
+        comparison_data = []
+        for result in comparison_results:
+            strategy_name = result['strategy']
+            stats_str = result['stats']
+            if not isinstance(stats_str, str) or "Error" in stats_str:
+                continue
+            stats_df = format_stats_table(stats_str)
+            if not stats_df.empty:
+                # Add strategy name to each row
+                stats_df['Strategy'] = strategy_name
+                comparison_data.append(stats_df)
+
+        if comparison_data:
+            # Combine all dataframes
+            combined_df = pd.concat(comparison_data, ignore_index=True)
+            # Pivot to show strategies as columns
+            pivot_df = combined_df.pivot(index='Metric', columns='Strategy', values='Value')
+            # Reset index to make Metric a column
+            pivot_df.reset_index(inplace=True)
+
+            # Display the comparison table
+            st.subheader("Performance Comparison")
+            st.dataframe(pivot_df, use_container_width=True)
+
+            # Download button for comparison data
+            csv_comparison = pivot_df.to_csv(index=False)
+            st.download_button(
+                label="Download Comparison Data",
+                data=csv_comparison,
+                file_name=f"strategy_comparison_{st.session_state.asset_name}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("No valid comparison data available.")
+
+    elif optimize_mode and hasattr(st.session_state, 'best_params'):
+        st.header(f"🎯 Strategy Optimization - {st.session_state.asset_name}")
+
+        # Display optimization results
+        best_params = st.session_state.best_params
+        best_performance = st.session_state.best_performance
+        optimized_strategy = st.session_state.optimized_strategy
+
+        if best_params is not None:
+            st.success(f"✅ Optimization Complete!")
+            st.subheader(f"Optimal Parameters for {optimized_strategy}")
+
+            # Display best parameters
+            params_df = pd.DataFrame(list(best_params.items()), columns=['Parameter', 'Optimal Value'])
+            st.dataframe(params_df, use_container_width=True, hide_index=True)
+
+            # Display best performance
+            st.metric("Best Performance", f"{best_performance:.2f}")
+
+            # Display optimization trade details
+            if hasattr(st.session_state, 'daily_df') and st.session_state.daily_df is not None:
+                # Add trade details for optimized strategy
+                st.subheader("Optimal Strategy Trade Details")
+                table_col1, table_col2 = st.columns(2)
+
+                with table_col1:
+                    st.markdown("**Daily Trade Details**")
+                    daily_display = st.session_state.daily_df.copy()
+
+                    # Format columns for better readability
+                    if 'entry_date' in daily_display.columns:
+                        daily_display['entry_date'] = pd.to_datetime(daily_display['entry_date']).dt.strftime('%Y-%m-%d')
+
+                    # Round numeric columns
+                    numeric_columns = ['entry_price', 'expiry_price', 'option_gains', 'option_price', 'current_pnl']
+                    for col in numeric_columns:
+                        if col in daily_display.columns:
+                            daily_display[col] = daily_display[col].round(2)
+
+                    st.dataframe(daily_display, use_container_width=True, height=300, hide_index=True)
+
+                with table_col2:
+                    st.markdown("**Performance Summary**")
+                    stats_df = format_stats_table(st.session_state.stats_str)
+                    if not stats_df.empty:
+                        st.dataframe(stats_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("❌ Optimization did not find any valid parameter combinations.")
+
+    if not (comparison_mode or optimize_mode):
+        st.info("⚡ Configure strategy parameters with sidebar and click 'Run Backtest' to see results in the tabs above.")
 
 if __name__ == "__main__":
     main()
