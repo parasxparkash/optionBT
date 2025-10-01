@@ -6,6 +6,9 @@ A comprehensive Python application for backtesting various stock options strateg
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Streamlit](https://img.shields.io/badge/streamlit-1.28.1-red)
 
+**Author:** Paras Parkash
+**GitHub:** [www.github.com/parasxparkash](https://www.github.com/parasxparkash)
+
 ## 📊 Overview
 
 This application allows users to backtest 14 different options strategies against historical stock data to evaluate their performance. It provides detailed analytics, performance metrics, and visualizations to help traders make informed decisions.

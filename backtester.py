@@ -645,6 +645,76 @@ class OptionsBacktester:
         periods_per_year = 252 / expiry_days  # Approximate trading periods per year
         return (mean_return / std_return) * np.sqrt(periods_per_year)
 
+    def _calculate_sortino_ratio(self, returns, expiry_days):
+        """Calculate Sortino ratio (only considers downside volatility)."""
+        if returns.empty:
+            return 0
+
+        mean_return = returns.mean()
+        downside_returns = returns[returns < 0]
+        if downside_returns.empty:
+            return float('inf')  # No downside volatility
+
+        downside_std = downside_returns.std()
+        if downside_std == 0:
+            return float('inf')
+
+        # Annualise based on expiry days
+        periods_per_year = 252 / expiry_days
+        return (mean_return / downside_std) * np.sqrt(periods_per_year)
+
+    def _calculate_calmar_ratio(self, returns, max_drawdown, expiry_days):
+        """Calculate Calmar ratio (annual return / maximum drawdown)."""
+        if max_drawdown == 0:
+            return float('inf')
+
+        # Annualize the returns
+        periods_per_year = 252 / expiry_days
+        annualized_return = returns.mean() * periods_per_year
+
+        # Return annualized return divided by absolute max drawdown
+        return annualized_return / abs(max_drawdown)
+
+    def _calculate_var(self, returns, confidence_level=0.95):
+        """Calculate Value at Risk (VaR)."""
+        if returns.empty:
+            return 0
+        return np.percentile(returns, (1 - confidence_level) * 100)
+
+    def _calculate_expected_shortfall(self, returns, confidence_level=0.95):
+        """Calculate Expected Shortfall (Conditional VaR)."""
+        if returns.empty:
+            return 0
+        var_threshold = self._calculate_var(returns, confidence_level)
+        tail_losses = returns[returns <= var_threshold]
+        return tail_losses.mean() if not tail_losses.empty else var_threshold
+
+    def _calculate_volatility(self, returns, expiry_days):
+        """Calculate annualized volatility."""
+        if returns.empty or returns.std() == 0:
+            return 0
+        periods_per_year = 252 / expiry_days
+        return returns.std() * np.sqrt(periods_per_year)
+
+    def _calculate_recovery_factor(self, total_return, max_drawdown):
+        """Calculate recovery factor (net profit / max drawdown)."""
+        if max_drawdown == 0:
+            return float('inf')
+        return total_return / abs(max_drawdown)
+
+    def _calculate_payoff_ratio(self, pnl_series):
+        """Calculate payoff ratio (avg win / avg loss)."""
+        wins = pnl_series[pnl_series > 0]
+        losses = pnl_series[pnl_series < 0]
+
+        if wins.empty or losses.empty:
+            return float('inf') if losses.empty else 0
+
+        avg_win = wins.mean()
+        avg_loss = abs(losses.mean())
+
+        return avg_win / avg_loss if avg_loss != 0 else float('inf')
+
     def summary_stats(self, strategy: OptionStrategy, expiry_days: int = 7, start_date: str = None, end_date: str = None,
                     trade_frequency: str = 'non_overlapping', entry_day_of_week: int = None,
                     interest_rate: float = 0.05, volatility: float = 0.50):
@@ -702,13 +772,37 @@ class OptionsBacktester:
         # Calculate summary statistics
         target_day_name = day_names[entry_day_of_week - 1] if entry_day_of_week else "All Days"
         
+        # Get weekday data for target day, handle case where no data exists for that day
+        target_day_data = weekday_data[weekday_data['day_of_week'] == target_day_name]
+        if not target_day_data.empty:
+            total_profit = target_day_data['total_profit'].values[0]
+            percentage_returns = target_day_data['percentage_returns'].values[0]
+        else:
+            # No data for this day of week, use average data
+            avg_data = weekday_data[weekday_data['day_of_week'] == 'Average']
+            if not avg_data.empty:
+                total_profit = avg_data['total_profit'].values[0]
+                percentage_returns = avg_data['percentage_returns'].values[0]
+            else:
+                total_profit = 0.0
+                percentage_returns = 0.0
+
+        # Calculate additional advanced metrics
+        sortino_ratio = self._calculate_sortino_ratio(valid_data['return_pct'], 1)
+        calmar_ratio = self._calculate_calmar_ratio(valid_data['return_pct'], self._calculate_max_drawdown(valid_data['current_pnl']), 1)
+        var_95 = self._calculate_var(valid_data['return_pct'], 0.95)
+        expected_shortfall = self._calculate_expected_shortfall(valid_data['return_pct'], 0.95)
+        volatility = self._calculate_volatility(valid_data['return_pct'], 1)
+        recovery_factor = self._calculate_recovery_factor(percentage_returns, self._calculate_max_drawdown(valid_data['current_pnl']))
+        payoff_ratio = self._calculate_payoff_ratio(valid_data['current_pnl'])
+
         stats = {
             'entry_date': f"{target_day_name} only" if entry_day_of_week else "All Days",
             'winning_days': winning_trades,
             'losing_days': len(valid_data) - winning_trades,
             'win_rate': (winning_trades / len(valid_data)) * 100,
-            'total_profit': weekday_data[weekday_data['day_of_week'] == target_day_name]['total_profit'].values[0],
-            'percentage_returns': weekday_data[weekday_data['day_of_week'] == target_day_name]['percentage_returns'].values[0],
+            'total_profit': total_profit,
+            'percentage_returns': percentage_returns,
             'best_day': valid_data['current_pnl'].max(),
             'worst_day': valid_data['current_pnl'].min(),
             'std_pnl': valid_data['current_pnl'].std(),
@@ -716,6 +810,13 @@ class OptionsBacktester:
             'max_drawdown': self._calculate_max_drawdown(valid_data['current_pnl']),
             'profit_factor': self._calculate_profit_factor(valid_data['current_pnl']),
             'sharpe_ratio': self._calculate_sharpe_ratio(valid_data['return_pct'], 1),  # Daily returns
+            'sortino_ratio': sortino_ratio,
+            'calmar_ratio': calmar_ratio,
+            'value_at_risk_95': var_95,
+            'expected_shortfall': expected_shortfall,
+            'annual_volatility': volatility * 100,  # Convert to percentage
+            'recovery_factor': recovery_factor,
+            'payoff_ratio': payoff_ratio,
         }
         
         # Round floats to 2 decimal places
